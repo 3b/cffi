@@ -560,13 +560,35 @@ The foreign array must be freed with foreign-array-free."
 ;;; structures.
 (defmethod foreign-struct-slot-value (ptr (slot aggregate-struct-slot))
   "Return a pointer to SLOT relative to PTR."
-  (convert-from-foreign (inc-pointer ptr (slot-offset slot))
-                        (slot-type slot)))
+  (if *translate-slots-recursively*
+      (if (= 1 (slot-count slot))
+          (mem-ref (inc-pointer ptr (slot-offset slot)) (slot-type slot))
+          (coerce
+           (loop with type = (parse-type (slot-type slot))
+                 with size = (foreign-type-size type)
+                 with slot-ptr = (inc-pointer ptr (slot-offset slot))
+                 for i below (slot-count slot)
+                 collect (mem-ref slot-ptr
+                                  (unparse-type type)
+                                  (* i size)))
+           'vector))
+      (convert-from-foreign (inc-pointer ptr (slot-offset slot))
+                            (slot-type slot))))
 
 (defmethod foreign-struct-slot-value-form (ptr (slot aggregate-struct-slot))
   "Return a form to get the value of SLOT relative to PTR."
-  `(convert-from-foreign (inc-pointer ,ptr ,(slot-offset slot))
-                         ',(slot-type slot)))
+  (if *translate-slots-recursively*
+      (if (= 1 (slot-count slot))
+          `(mem-ref ,(inc-pointer ptr (slot-offset slot)) ,(slot-type slot))
+          (cons 'vector
+                (loop for i below (slot-count slot)
+                      collect `(mem-aref (inc-pointer
+                                          ,ptr
+                                          ,(slot-offset slot))
+                                         ',(slot-type slot)
+                                         ,i))))
+      `(convert-from-foreign (inc-pointer ,ptr ,(slot-offset slot))
+                             ',(slot-type slot))))
 
 (defmethod translate-aggregate-to-foreign (ptr value (type foreign-struct-type))
   ;;; FIXME: use the block memory interface instead.
@@ -576,9 +598,23 @@ The foreign array must be freed with foreign-array-free."
 (defmethod (setf foreign-struct-slot-value)
     (value ptr (slot aggregate-struct-slot))
   "Set the value of an aggregate SLOT to VALUE in PTR."
-  (translate-aggregate-to-foreign (inc-pointer ptr (slot-offset slot))
-                                  value
-                                  (parse-type (slot-type slot))))
+  (if *translate-slots-recursively*
+      (if (= 1 (slot-count slot))
+          (translate-into-foreign-memory value
+                                         (parse-type (slot-type slot))
+                                         (inc-pointer ptr (slot-offset slot)))
+          (loop with type = (parse-type (slot-type slot))
+                with size = (foreign-type-size type)
+                for i below (slot-count slot)
+                do (translate-into-foreign-memory (elt value i)
+                                                  type
+                                                  (inc-pointer ptr
+                                                               (+ (slot-offset
+                                                                   slot)
+                                                                  (* i size))))))
+      (translate-aggregate-to-foreign (inc-pointer ptr (slot-offset slot))
+                                      value
+                                      (parse-type (slot-type slot)))))
 
 (defmethod foreign-struct-slot-set-form (value ptr (slot aggregate-struct-slot))
   "Return a form to get the value of an aggregate SLOT relative to PTR."
@@ -661,9 +697,9 @@ The foreign array must be freed with foreign-array-free."
 
 (defun notice-foreign-struct-definition (name options slots)
   "Parse and install a foreign structure definition."
-  (destructuring-bind (&key size (class 'foreign-struct-type))
+  (destructuring-bind (&key size (class 'foreign-struct-type) recursive)
       options
-    (let ((struct (make-instance class :name name))
+    (let ((struct (make-instance class :name name :recursive recursive))
           (current-offset 0)
           (max-align 1)
           (firstp t))
@@ -764,8 +800,10 @@ The foreign array must be freed with foreign-array-free."
 (define-compiler-macro foreign-slot-value (&whole form ptr type slot-name)
   "Optimizer for FOREIGN-SLOT-VALUE when TYPE is constant."
   (if (and (constantp type) (constantp slot-name))
-      (foreign-struct-slot-value-form
-       ptr (get-slot-info (eval type) (eval slot-name)))
+      (let* ((struct (follow-typedefs (parse-type (eval type))))
+             (*translate-slots-recursively* (translate-recursive-p struct)))
+        (foreign-struct-slot-value-form
+         ptr (get-slot-info (eval type) (eval slot-name))))
       form))
 
 (define-setf-expander foreign-slot-value (ptr type slot-name &environment env)

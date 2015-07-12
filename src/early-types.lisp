@@ -244,7 +244,13 @@ Signals an error if FOREIGN-TYPE is undefined."))
     ;; a proper aggregate type: (:STRUCT FOO), etc.
     :initform nil
     :initarg :bare
-    :reader bare-struct-type-p)))
+    :reader bare-struct-type-p)
+   (translate-recursive
+    ;; flag indicating we want aggregate slots recursively translated
+    ;; instead of the default behavior of just using a pointer
+    :initform nil
+    :initarg :recursive
+    :reader translate-recursive-p)))
 
 (defun slots-in-order (structure-type)
   "A list of the structure's slots in order."
@@ -376,6 +382,10 @@ Signals an error if FOREIGN-TYPE is undefined."))
   "Convert TYPE to a built-in type by following aliases.
 Signals an error if the type cannot be resolved."
   (canonicalize (parse-type type)))
+
+;;; current type wants aggregate slots expanded recursively when
+;;; translating instead of leaving them as pointers
+(defparameter *translate-slots-recursively* nil)
 
 ;;; Translate VALUE to a foreign object of the type represented by
 ;;; TYPE, which will be a subclass of TRANSLATABLE-FOREIGN-TYPE.

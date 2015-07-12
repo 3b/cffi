@@ -33,10 +33,16 @@
                                           (type foreign-struct-type)
                                           p)
   (unless (bare-struct-type-p type)
-    (loop for (name value) on object by #'cddr
-          do (setf (foreign-slot-value p (unparse-type type) name)
-                   (let ((slot (gethash name (structure-slots type))))
-                     (convert-to-foreign value (slot-type slot)))))))
+    (let ((*translate-slots-recursively* (translate-recursive-p type)))
+     (loop for (name value) on object by #'cddr
+           for slot = (gethash name (structure-slots type))
+           if (and *translate-slots-recursively*
+                   (typep slot 'aggregate-struct-slot))
+             do (setf (foreign-struct-slot-value p slot)
+                      value)
+           else
+             do (setf (foreign-slot-value p (unparse-type type) name)
+                      (convert-to-foreign value (slot-type slot)))))))
 
 (defun convert-into-foreign-memory (value type ptr)
   (let ((ptype (parse-type type)))
@@ -54,7 +60,8 @@
   ;; Iterate over slots, make plist
   (if (bare-struct-type-p type)
       p
-      (let ((plist (list)))
+      (let ((plist (list))
+            (*translate-slots-recursively* (translate-recursive-p type)))
         (loop for slot being the hash-value of (structure-slots type)
               for name = (slot-name slot)
               do (setf (getf plist name)
